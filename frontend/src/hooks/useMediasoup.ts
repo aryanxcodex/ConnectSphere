@@ -5,162 +5,197 @@ import type {
   Transport,
   Producer,
   Consumer,
+  RtpCapabilities,
+  RtpParameters, // ✅ Import RtpParameters for our new type
 } from "mediasoup-client/types";
-import type { CreateTransportParams } from "../types";
 import { socket } from "../lib/socket";
 
-export function useMediasoup(roomId: string) {
+interface RemoteStream {
+  id: string;
+  stream: MediaStream;
+}
+
+interface JoinRoomResponse {
+  routerRtpCapabilities: RtpCapabilities;
+  existingProducerIds?: string[];
+}
+
+// ✅ Define a type for the parameters received from the server when consuming
+interface ConsumerParams {
+  id: string;
+  producerId: string;
+  kind: "audio" | "video";
+  rtpParameters: RtpParameters;
+  error?: string;
+}
+
+export function useMediasoup(roomId: string, localStream: MediaStream | null) {
   const deviceRef = useRef<Device | null>(null);
   const sendTransportRef = useRef<Transport | null>(null);
   const recvTransportRef = useRef<Transport | null>(null);
-  const [consumers, setConsumers] = useState<Consumer[]>([]);
+  const producersRef = useRef<Producer[]>([]);
+  const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
+  const [isProducing, setIsProducing] = useState(false);
 
   useEffect(() => {
-    socket.emit("join-room", { roomId }, (res: { joined: boolean }) => {
-      console.log("✅ Joined room:", res);
+    socket.connect();
+
+    const initialize = async (routerRtpCapabilities: RtpCapabilities) => {
+      const device = new mediasoupClient.Device();
+      await device.load({ routerRtpCapabilities });
+      deviceRef.current = device;
+
+      const sendTransportParams = await new Promise<any>((resolve) => {
+        socket.emit("create-transport", { roomId, direction: "send" }, resolve);
+      });
+      const sendTransport = device.createSendTransport(sendTransportParams);
+      sendTransportRef.current = sendTransport;
+
+      sendTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
+        // ✅ Add explicit type for the callback response `res`
+        socket.emit(
+          "connect-transport",
+          { roomId, transportId: sendTransport.id, dtlsParameters },
+          (res: { error?: string }) => {
+            res.error ? errback(new Error(res.error)) : callback();
+          }
+        );
+      });
+
+      sendTransport.on(
+        "produce",
+        async ({ kind, rtpParameters, appData }, callback, errback) => {
+          try {
+            const { id } = await new Promise<{ id: string }>((resolve) => {
+              socket.emit(
+                "produce",
+                {
+                  roomId,
+                  transportId: sendTransport.id,
+                  kind,
+                  rtpParameters,
+                  appData,
+                },
+                resolve
+              );
+            });
+            callback({ id });
+          } catch (error) {
+            errback(error as Error);
+          }
+        }
+      );
+
+      const recvTransportParams = await new Promise<any>((resolve) => {
+        socket.emit("create-transport", { roomId, direction: "recv" }, resolve);
+      });
+      const recvTransport = device.createRecvTransport(recvTransportParams);
+      recvTransportRef.current = recvTransport;
+
+      recvTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
+        // ✅ Add explicit type for the callback response `res`
+        socket.emit(
+          "connect-transport",
+          { roomId, transportId: recvTransport.id, dtlsParameters },
+          (res: { error?: string }) => {
+            res.error ? errback(new Error(res.error)) : callback();
+          }
+        );
+      });
+
+      console.log("✅ Device and Transports created");
+    };
+
+    socket.on("connect", () => {
+      socket.emit("join-room", { roomId }, async (res: JoinRoomResponse) => {
+        console.log("✅ Joined room, router capabilities received");
+
+        if (!deviceRef.current?.loaded) {
+          await initialize(res.routerRtpCapabilities);
+        }
+
+        if (res.existingProducerIds) {
+          console.log(
+            `Consuming ${res.existingProducerIds.length} existing producers...`
+          );
+          for (const producerId of res.existingProducerIds) {
+            consume(producerId);
+          }
+        }
+      });
     });
-    socket.on("new-producer", ({ producerId }: { producerId: string }) => {
+
+    const handleNewProducer = ({
+      producerId,
+      socketId,
+    }: {
+      producerId: string;
+      socketId: string;
+    }) => {
+      console.log(`📥 New producer available from ${socketId}, consuming...`);
       consume(producerId);
-    });
+    };
+
+    socket.on("new-producer", handleNewProducer);
+
     return () => {
+      console.log("Running cleanup for useMediasoup");
+      socket.off("new-producer", handleNewProducer);
+      sendTransportRef.current?.close();
+      recvTransportRef.current?.close();
       socket.disconnect();
     };
   }, [roomId]);
 
-  const join = async () => {
-    if (!deviceRef.current) return;
-
-    const device = deviceRef.current;
-
-    // Create Send Transport
-    const sendParams = await new Promise<any>((resolve) => {
-      socket.emit(
-        "create-transport",
-        { direction: "send", roomId },
-        (res: CreateTransportParams) => resolve(res)
+  const produce = async () => {
+    if (isProducing || !localStream || !sendTransportRef.current) {
+      console.warn(
+        "Cannot produce: already producing or stream/transport not ready"
       );
-    });
-
-    const sendTransport = device.createSendTransport(sendParams);
-    sendTransportRef.current = sendTransport;
-
-    sendTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
-      socket.emit(
-        "connect-transport",
-        {
-          transportId: sendTransport.id,
-          dtlsParameters,
-        },
-        (res: any) => {
-          res.error ? errback(new Error(res.error)) : callback();
-        }
-      );
-    });
-
-    sendTransport.on(
-      "produce",
-      ({ kind, rtpParameters }, callback, errback) => {
-        socket.emit(
-          "produce",
-          {
-            roomId,
-            transportId: sendTransport.id,
-            kind,
-            rtpParameters,
-          },
-          (res: any) => {
-            res.error
-              ? errback(new Error(res.error))
-              : callback({ id: res.id });
-          }
-        );
-      }
-    );
-
-    console.log("✅ Send transport created");
-
-    // Create Recv Transport
-    const recvParams = await new Promise<any>((resolve) => {
-      socket.emit("create-transport", { roomId }, (params: any) =>
-        resolve(params)
-      );
-    });
-
-    const recvTransport = device.createRecvTransport(recvParams);
-    recvTransportRef.current = recvTransport;
-
-    recvTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
-      socket.emit(
-        "connect-transport",
-        {
-          transportId: recvTransport.id,
-          dtlsParameters,
-        },
-        (res: any) => {
-          res.error ? errback(new Error(res.error)) : callback();
-        }
-      );
-    });
-
-    console.log("✅ Recv transport created");
-  };
-
-  const produce = async (stream: MediaStream) => {
-    const sendTransport = sendTransportRef.current;
-    if (!sendTransport) return;
-
-    for (const track of stream.getTracks()) {
-      await sendTransport.produce({ track });
+      return;
     }
 
-    console.log("🎤 Local media produced");
+    console.log("🎤 Starting to produce local media...");
+    setIsProducing(true);
+
+    for (const track of localStream.getTracks()) {
+      const producer = await sendTransportRef.current.produce({ track });
+      producersRef.current.push(producer);
+    }
+    console.log("✅ Local media produced");
   };
 
   const consume = async (producerId: string) => {
     const device = deviceRef.current;
     const recvTransport = recvTransportRef.current;
-    if (!device || !recvTransport) return;
+    if (!device || !recvTransport) {
+      console.error("Cannot consume: device or transport not ready");
+      return;
+    }
 
-    socket.emit(
-      "consume",
-      {
-        roomId,
-        transportId: recvTransport.id,
-        producerId,
-        rtpCapabilities: device.rtpCapabilities,
-      },
-      async (res: any) => {
-        if (res.error) {
-          console.error("❌ Consume failed:", res.error);
-          return;
-        }
+    const { rtpCapabilities } = device;
+    // ✅ Use our new `ConsumerParams` type instead of `<any>`
+    const params = await new Promise<ConsumerParams>((resolve) => {
+      socket.emit(
+        "consume",
+        { roomId, producerId, rtpCapabilities, transportId: recvTransport.id },
+        resolve
+      );
+    });
 
-        const consumer = await recvTransport.consume({
-          id: res.id,
-          producerId: res.producerId,
-          kind: res.kind,
-          rtpParameters: res.rtpParameters,
-        });
+    if (params.error) {
+      console.error("❌ Consume failed on server:", params.error);
+      return;
+    }
 
-        setConsumers((prev) => [...prev, consumer]);
+    const consumer = await recvTransport.consume(params);
+    const { track } = consumer;
+    const stream = new MediaStream([track]);
 
-        const stream = new MediaStream([consumer.track]);
-        const el = document.createElement("video");
-        el.srcObject = stream;
-        el.autoplay = true;
-        el.muted = true;
-        el.playsInline = true;
-        el.style.width = "300px";
-        document.body.appendChild(el);
+    setRemoteStreams((prev) => [...prev, { id: consumer.id, stream }]);
 
-        console.log("📥 Consuming", res.kind);
-      }
-    );
+    socket.emit("resume-consumer", { roomId, consumerId: consumer.id });
   };
 
-  return {
-    join,
-    produce,
-    consumers,
-  };
+  return { produce, remoteStreams, isProducing };
 }

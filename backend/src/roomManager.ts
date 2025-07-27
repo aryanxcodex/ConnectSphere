@@ -8,7 +8,7 @@ import { getMediasoupRouter } from "./mediasoup";
 
 interface Peer {
   id: string;
-  transports: WebRtcTransport[];
+  transports: Map<string, WebRtcTransport>;
   producers: Producer[];
   consumers: Consumer[];
   socket: any;
@@ -27,7 +27,7 @@ class Room {
   addPeer(peerId: string, socket: any) {
     this.peers.set(peerId, {
       id: peerId,
-      transports: [],
+      transports: new Map(), // ✅ Correctly initialized as a new Map
       producers: [],
       consumers: [],
       socket,
@@ -38,7 +38,7 @@ class Room {
     const peer = this.peers.get(peerId);
     if (!peer) return;
 
-    // Cleanup transports/producers/consumers
+    // This correctly iterates over the Map's values
     peer.transports.forEach((t) => t.close());
     peer.producers.forEach((p) => p.close());
     peer.consumers.forEach((c) => c.close());
@@ -55,13 +55,13 @@ class Room {
   }
 
   getPeersExcept(socketId: string) {
-    return Array.from(this.peers.entries())
-      .filter(([id]) => id !== socketId)
-      .map(([_, peer]) => peer);
+    return Array.from(this.peers.values()).filter(
+      (peer) => peer.id !== socketId
+    );
   }
 }
 
-const rooms: Map<string, Room> = new Map();
+export const rooms: Map<string, Room> = new Map();
 
 export function getOrCreateRoom(roomId: string): Room {
   if (!rooms.has(roomId)) {

@@ -3,53 +3,80 @@ import { useMediasoup } from "./hooks/useMediasoup";
 
 function App() {
   const roomId = "demo-room";
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
 
-  const { join, produce } = useMediasoup(roomId);
+  // ✅ Destructure the new `isProducing` state from the hook
+  const { produce, remoteStreams, isProducing } = useMediasoup(
+    roomId,
+    localStream
+  );
 
   useEffect(() => {
-    // Get local webcam/mic
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((mediaStream) => {
-        setStream(mediaStream);
-        if (videoRef.current) {
-          videoRef.current.srcObject = mediaStream;
+        setLocalStream(mediaStream);
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = mediaStream;
         }
       })
       .catch((err) => console.error("Error accessing media devices", err));
   }, []);
 
-  const handleJoin = async () => {
-    await join();
-  };
-
   const handleProduce = async () => {
-    if (stream) {
-      await produce(stream);
-    }
+    console.log("🟡 handleProduce() called");
+    await produce();
   };
 
   return (
     <div style={{ padding: "2rem" }}>
       <h1>🎥 Mediasoup Video Chat</h1>
 
+      {/* Local Video */}
       <video
-        ref={videoRef}
+        ref={localVideoRef}
         autoPlay
-        muted
+        muted // Mute local video to prevent feedback
         playsInline
-        style={{ width: "400px", borderRadius: "8px" }}
+        style={{
+          width: "400px",
+          borderRadius: "8px",
+          border: "2px solid #555",
+        }}
       />
 
       <div style={{ marginTop: "1rem" }}>
-        <button onClick={handleJoin} style={buttonStyle}>
-          Join Room
+        {/* ✅ Update the button to use the `isProducing` state */}
+        <button
+          onClick={handleProduce}
+          style={buttonStyle}
+          disabled={!localStream || isProducing}
+        >
+          {isProducing ? "Sharing..." : "Start Sharing"}
         </button>
-        <button onClick={handleProduce} style={buttonStyle}>
-          Start Streaming
-        </button>
+      </div>
+
+      {/* Remote Videos Grid */}
+      <h2>Remote Streams</h2>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+          gap: "1rem",
+        }}
+      >
+        {remoteStreams.map(({ id, stream }) => (
+          <video
+            key={id}
+            autoPlay
+            playsInline
+            style={{ width: "100%", borderRadius: "8px" }}
+            ref={(video) => {
+              if (video) video.srcObject = stream;
+            }}
+          />
+        ))}
       </div>
     </div>
   );

@@ -1,7 +1,19 @@
+// src/lib/socket.ts
+
 import { io, Socket } from "socket.io-client";
 
-const URL = "http://localhost:3000"; // or wherever your backend runs
+const URL = "http://localhost:3000";
 
+// ✅ Set autoConnect to false
 export const socket: Socket = io(URL, {
-  transports: ["websocket"],
+  autoConnect: false, // 👈 Change this to false
+  withCredentials: true,
+});
+
+socket.on("connect", () => {
+  console.log("✅ Socket.IO connected:", socket.id);
+});
+
+socket.on("connect_error", (err) => {
+  console.error("❌ Socket.IO connection error:", err.message);
 });
