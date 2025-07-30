@@ -10,9 +10,10 @@ import type {
 } from "mediasoup-client/types";
 import { socket } from "../lib/socket";
 
-// ✅ Correct Interfaces
+// ✅ Updated RemoteStream to include producerId for reliable cleanup
 interface RemoteStream {
   id: string; // Consumer ID
+  producerId: string;
   stream: MediaStream;
   socketId: string;
 }
@@ -34,9 +35,14 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
   const deviceRef = useRef<Device | null>(null);
   const sendTransportRef = useRef<Transport | null>(null);
   const recvTransportRef = useRef<Transport | null>(null);
-  const producersRef = useRef<Producer[]>([]);
+  const producersRef = useRef<Map<string, Producer>>(new Map());
   const [remoteStreams, setRemoteStreams] = useState<RemoteStream[]>([]);
   const [isProducing, setIsProducing] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
+  const [isCameraOff, setIsCameraOff] = useState(true);
+
+  // ✅ Create a ref to store and manage audio elements
+  const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
 
   useEffect(() => {
     socket.connect();
@@ -132,20 +138,31 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
       socketId: string;
     }) => {
       console.log(`📥 New producer available from ${socketId}, consuming...`);
-      // ✅ FIXED: Pass the socketId to the consume function
       consume(producerId, socketId);
     };
 
     socket.on("new-producer", handleNewProducer);
 
     socket.on("producer-closed", ({ producerId }) => {
+      console.log(`Server notified that producer ${producerId} was closed.`);
+      // ✅ Correctly filter by producerId to remove video tile
       setRemoteStreams((prevStreams) =>
-        prevStreams.filter((rs) => rs.id !== producerId)
+        prevStreams.filter((rs) => rs.producerId !== producerId)
       );
+      // ✅ Also remove the corresponding audio element
+      const audio = audioRef.current.get(producerId);
+      if (audio) {
+        audio.remove();
+        audioRef.current.delete(producerId);
+      }
     });
 
     return () => {
       console.log("Running cleanup for useMediasoup");
+      // ✅ Cleanup all audio elements on dismount
+      audioRef.current.forEach((audio) => audio.remove());
+      audioRef.current.clear();
+
       socket.off("new-producer", handleNewProducer);
       socket.off("producer-closed");
       sendTransportRef.current?.close();
@@ -155,26 +172,54 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
   }, [roomId]);
 
   const produce = async () => {
-    if (isProducing || !localStream || !sendTransportRef.current) {
-      console.warn(
-        "Cannot produce: already producing or stream/transport not ready"
-      );
-      return;
-    }
+    if (!localStream || !sendTransportRef.current) return;
+    if (producersRef.current.size > 0) return; // Prevent re-producing
 
     console.log("🎤 Starting to produce local media...");
-    setIsProducing(true);
 
-    for (const track of localStream.getTracks()) {
-      const producer = await sendTransportRef.current.produce({ track });
-      producersRef.current.push(producer);
-    }
-    console.log("✅ Local media produced");
+    const audioProducer = await sendTransportRef.current.produce({
+      track: localStream.getAudioTracks()[0],
+    });
+    const videoProducer = await sendTransportRef.current.produce({
+      track: localStream.getVideoTracks()[0],
+    });
+
+    producersRef.current.set("audio", audioProducer);
+    producersRef.current.set("video", videoProducer);
   };
 
-  // ✅ FIXED: Update consume to accept socketId
+  const toggleMute = () => {
+    const audioProducer = producersRef.current.get("audio");
+    if (!audioProducer) return;
+
+    if (audioProducer.paused) {
+      audioProducer.resume();
+      setIsMuted(false);
+    } else {
+      audioProducer.pause();
+      setIsMuted(true);
+    }
+  };
+
+  const toggleCamera = () => {
+    const videoProducer = producersRef.current.get("video");
+    if (!videoProducer) return;
+
+    const videoTrack = localStream?.getVideoTracks()[0];
+    if (!videoTrack) return;
+
+    if (videoProducer.paused) {
+      videoProducer.resume();
+      videoTrack.enabled = true;
+      setIsCameraOff(false);
+    } else {
+      videoProducer.pause();
+      videoTrack.enabled = false;
+      setIsCameraOff(true);
+    }
+  };
+
   const consume = async (producerId: string, socketId: string) => {
-    // Prevent consuming our own producer
     if (socketId === socket.id) {
       return;
     }
@@ -209,14 +254,29 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
     });
 
     if (consumer.kind === "video") {
+      // ✅ Store producerId along with consumer.id for correct cleanup
       setRemoteStreams((prev) => [
         ...prev,
-        { id: consumer.id, stream, socketId },
+        { id: consumer.id, producerId: consumer.producerId, stream, socketId },
       ]);
+    } else if (consumer.kind === "audio") {
+      // ✅ Handle Audio: create, play, and store an audio element
+      const audio = document.createElement("audio");
+      audio.srcObject = stream;
+      audio.autoplay = true;
+      document.body.appendChild(audio);
+      audioRef.current.set(consumer.producerId, audio); // Store using producerId
     }
 
     socket.emit("resume-consumer", { roomId, consumerId: consumer.id });
   };
 
-  return { produce, remoteStreams, isProducing };
+  return {
+    produce,
+    remoteStreams,
+    toggleMute,
+    isMuted,
+    toggleCamera,
+    isCameraOff,
+  };
 }
