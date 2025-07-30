@@ -40,10 +40,13 @@ function Room() {
   };
 
   const activeRemoteStreams = useMemo(
-    () =>
-      remoteStreams.filter(
+    () => {
+      const result = remoteStreams.filter(
         ({ stream }) => stream.active && stream.id !== localStream?.id
-      ),
+      );
+      console.log("activeRemoteStreams", result);
+      return result;
+    },
     [remoteStreams, localStream]
   );
 

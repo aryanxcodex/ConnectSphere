@@ -31,23 +31,27 @@ async function main() {
       socket.data.roomId = roomId;
       const room = getOrCreateRoom(roomId);
 
-      // Get a list of all producer IDs from other peers in the room
-      const existingProducerIds = room
+      // Create a list of objects containing both producerId and socketId
+      const existingProducers = room
         .getPeersExcept(socket.id)
-        .flatMap((peer) => peer.producers.map((p) => p.id));
+        .flatMap((peer) =>
+          peer.producers.map((p) => ({
+            producerId: p.id,
+            socketId: peer.id,
+          }))
+        );
 
       console.log(
-        `Informing peer ${socket.id} about ${existingProducerIds.length} existing producers.`
+        `Informing peer ${socket.id} about ${existingProducers.length} existing producers.`
       );
 
-      // Now, add the new peer to the room
       room.addPeer(socket.id, socket);
       console.log(`👤 Peer ${socket.id} joined room ${roomId}`);
 
-      // Send router capabilities and existing producer IDs back to the client
+      // Send the correctly formatted list with the correct key
       cb({
         routerRtpCapabilities: room.router.rtpCapabilities,
-        existingProducerIds,
+        existingProducers,
       });
     });
 

@@ -6,21 +6,22 @@ import type {
   Producer,
   Consumer,
   RtpCapabilities,
-  RtpParameters, // ✅ Import RtpParameters for our new type
+  RtpParameters,
 } from "mediasoup-client/types";
 import { socket } from "../lib/socket";
 
+// ✅ Correct Interfaces
 interface RemoteStream {
-  id: string;
+  id: string; // Consumer ID
   stream: MediaStream;
+  socketId: string;
 }
 
 interface JoinRoomResponse {
   routerRtpCapabilities: RtpCapabilities;
-  existingProducerIds?: string[];
+  existingProducers?: { producerId: string; socketId: string }[];
 }
 
-// ✅ Define a type for the parameters received from the server when consuming
 interface ConsumerParams {
   id: string;
   producerId: string;
@@ -52,7 +53,6 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
       sendTransportRef.current = sendTransport;
 
       sendTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
-        // ✅ Add explicit type for the callback response `res`
         socket.emit(
           "connect-transport",
           { roomId, transportId: sendTransport.id, dtlsParameters },
@@ -93,7 +93,6 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
       recvTransportRef.current = recvTransport;
 
       recvTransport.on("connect", ({ dtlsParameters }, callback, errback) => {
-        // ✅ Add explicit type for the callback response `res`
         socket.emit(
           "connect-transport",
           { roomId, transportId: recvTransport.id, dtlsParameters },
@@ -114,12 +113,12 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
           await initialize(res.routerRtpCapabilities);
         }
 
-        if (res.existingProducerIds) {
+        if (res.existingProducers) {
           console.log(
-            `Consuming ${res.existingProducerIds.length} existing producers...`
+            `Consuming ${res.existingProducers.length} existing producers...`
           );
-          for (const producerId of res.existingProducerIds) {
-            consume(producerId);
+          for (const { producerId, socketId } of res.existingProducers) {
+            consume(producerId, socketId);
           }
         }
       });
@@ -133,14 +132,22 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
       socketId: string;
     }) => {
       console.log(`📥 New producer available from ${socketId}, consuming...`);
-      consume(producerId);
+      // ✅ FIXED: Pass the socketId to the consume function
+      consume(producerId, socketId);
     };
 
     socket.on("new-producer", handleNewProducer);
 
+    socket.on("producer-closed", ({ producerId }) => {
+      setRemoteStreams((prevStreams) =>
+        prevStreams.filter((rs) => rs.id !== producerId)
+      );
+    });
+
     return () => {
       console.log("Running cleanup for useMediasoup");
       socket.off("new-producer", handleNewProducer);
+      socket.off("producer-closed");
       sendTransportRef.current?.close();
       recvTransportRef.current?.close();
       socket.disconnect();
@@ -165,7 +172,13 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
     console.log("✅ Local media produced");
   };
 
-  const consume = async (producerId: string) => {
+  // ✅ FIXED: Update consume to accept socketId
+  const consume = async (producerId: string, socketId: string) => {
+    // Prevent consuming our own producer
+    if (socketId === socket.id) {
+      return;
+    }
+
     const device = deviceRef.current;
     const recvTransport = recvTransportRef.current;
     if (!device || !recvTransport) {
@@ -174,7 +187,6 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
     }
 
     const { rtpCapabilities } = device;
-    // ✅ Use our new `ConsumerParams` type instead of `<any>`
     const params = await new Promise<ConsumerParams>((resolve) => {
       socket.emit(
         "consume",
@@ -192,7 +204,16 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
     const { track } = consumer;
     const stream = new MediaStream([track]);
 
-    setRemoteStreams((prev) => [...prev, { id: consumer.id, stream }]);
+    consumer.on("transportclose", () => {
+      setRemoteStreams((prev) => prev.filter((rs) => rs.id !== consumer.id));
+    });
+
+    if (consumer.kind === "video") {
+      setRemoteStreams((prev) => [
+        ...prev,
+        { id: consumer.id, stream, socketId },
+      ]);
+    }
 
     socket.emit("resume-consumer", { roomId, consumerId: consumer.id });
   };
