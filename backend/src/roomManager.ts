@@ -27,7 +27,7 @@ class Room {
   addPeer(peerId: string, socket: any) {
     this.peers.set(peerId, {
       id: peerId,
-      transports: new Map(), // ✅ Correctly initialized as a new Map
+      transports: new Map(),
       producers: [],
       consumers: [],
       socket,
@@ -37,6 +37,13 @@ class Room {
   removePeer(peerId: string) {
     const peer = this.peers.get(peerId);
     if (!peer) return;
+
+    peer.producers.forEach((producer) => {
+      this.getPeersExcept(peerId).forEach((otherPeer) => {
+        // This emits an event to the client-side
+        otherPeer.socket.emit("producer-closed", { producerId: producer.id });
+      });
+    });
 
     // This correctly iterates over the Map's values
     peer.transports.forEach((t) => t.close());

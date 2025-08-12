@@ -4,9 +4,8 @@ import { io, Socket } from "socket.io-client";
 
 const URL = "http://localhost:3000";
 
-// ✅ Set autoConnect to false
 export const socket: Socket = io(URL, {
-  autoConnect: false, // 👈 Change this to false
+  autoConnect: false, 
   withCredentials: true,
 });
 
