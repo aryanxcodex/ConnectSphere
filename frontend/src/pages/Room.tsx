@@ -2,7 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useMediasoup } from "../hooks/useMediasoup";
 // ✅ Import icons from lucide-react
-import { Mic, MicOff, Video, VideoOff, PhoneOff } from "lucide-react";
+import {
+  Mic,
+  MicOff,
+  Video,
+  VideoOff,
+  PhoneOff,
+  ScreenShare,
+  ScreenShareOff,
+} from "lucide-react";
 
 // Helper function for layout remains the same
 const getVideoSizeClasses = (count: number): string => {
@@ -12,7 +20,6 @@ const getVideoSizeClasses = (count: number): string => {
   if (count <= 9) return "w-[calc(33.33%-0.75rem)]";
   return "w-[calc(25%-0.75rem)]";
 };
-
 
 function Room() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -27,6 +34,9 @@ function Room() {
     isMuted,
     toggleCamera,
     isCameraOff,
+    startScreenShare,
+    stopScreenShare,
+    isScreenSharing,
   } = useMediasoup(roomId || "default-room", localStream);
 
   useEffect(() => {
@@ -56,6 +66,14 @@ function Room() {
     () => getVideoSizeClasses(participantCount),
     [participantCount]
   );
+
+  const handleToggleScreenShare = () => {
+    if (isScreenSharing) {
+      stopScreenShare();
+    } else {
+      startScreenShare();
+    }
+  };
 
   const handleHangUp = () => {
     navigate("/");
@@ -136,6 +154,16 @@ function Room() {
           }`}
         >
           {isCameraOff ? <VideoOff /> : <Video />}
+        </button>
+        <button
+          onClick={handleToggleScreenShare}
+          className={`p-3 rounded-full transition-colors ${
+            isScreenSharing
+              ? "bg-blue-700 hover:bg-blue-800"
+              : "bg-gray-600 hover:bg-gray-700"
+          }`}
+        >
+          {isScreenSharing ? <ScreenShareOff /> : <ScreenShare />}
         </button>
         <button
           onClick={handleHangUp}

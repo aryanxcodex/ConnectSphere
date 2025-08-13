@@ -32,14 +32,12 @@ async function main() {
       const room = getOrCreateRoom(roomId);
 
       // Create a list of objects containing both producerId and socketId
-      const existingProducers = room
-        .getPeersExcept(socket.id)
-        .flatMap((peer) =>
-          peer.producers.map((p) => ({
-            producerId: p.id,
-            socketId: peer.id,
-          }))
-        );
+      const existingProducers = room.getPeersExcept(socket.id).flatMap((peer) =>
+        peer.producers.map((p) => ({
+          producerId: p.id,
+          socketId: peer.id,
+        }))
+      );
 
       console.log(
         `Informing peer ${socket.id} about ${existingProducers.length} existing producers.`
@@ -120,6 +118,27 @@ async function main() {
         cb({ id: producer.id });
       }
     );
+
+    socket.on("close-producer", ({ roomId, producerId }, cb) => {
+      const room = getOrCreateRoom(roomId);
+      const peer = room.getPeer(socket.id);
+      if (!peer) return cb({ error: "Peer not found" });
+
+      const producer = peer.producers.find((p) => p.id === producerId);
+      if (!producer) return cb({ error: "Producer not found" });
+
+      producer.close();
+
+      // Remove the closed producer from the peer's list
+      peer.producers = peer.producers.filter((p) => p.id !== producerId);
+
+      // Notify all other peers in the room that this producer is closed
+      room.getPeersExcept(socket.id).forEach((otherPeer) => {
+        otherPeer.socket.emit("producer-closed", { producerId: producer.id });
+      });
+
+      cb({ closed: true });
+    });
 
     socket.on(
       "consume",

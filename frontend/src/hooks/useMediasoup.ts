@@ -40,9 +40,49 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
   const [isProducing, setIsProducing] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [isCameraOff, setIsCameraOff] = useState(true);
+  const screenShareProducerRef = useRef<Producer | null>(null);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
 
   // ✅ Create a ref to store and manage audio elements
   const audioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+
+  const startScreenShare = async () => {
+    if (!deviceRef.current || !sendTransportRef.current || isScreenSharing)
+      return;
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+      });
+      const screenTrack = stream.getVideoTracks()[0];
+
+      const producer = await sendTransportRef.current.produce({
+        track: screenTrack,
+      });
+      screenShareProducerRef.current = producer;
+      setIsScreenSharing(true);
+
+      // ✅ Listen for when the user clicks the browser's "Stop sharing" button
+      screenTrack.onended = () => {
+        console.log("Screen sharing track ended.");
+        stopScreenShare();
+      };
+    } catch (err) {
+      console.error("Error starting screen share:", err);
+    }
+  };
+
+  const stopScreenShare = async () => {
+    const producer = screenShareProducerRef.current;
+    if (!producer) return;
+
+    // Tell the server to close this producer
+    socket.emit("close-producer", { roomId, producerId: producer.id }, () => {
+      producer.close();
+      screenShareProducerRef.current = null;
+      setIsScreenSharing(false);
+    });
+  };
 
   useEffect(() => {
     socket.connect();
@@ -172,20 +212,46 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
   }, [roomId]);
 
   const produce = async () => {
-    if (!localStream || !sendTransportRef.current) return;
-    if (producersRef.current.size > 0) return; // Prevent re-producing
+    if (
+      !localStream ||
+      !sendTransportRef.current ||
+      producersRef.current.has("video")
+    ) {
+      console.warn(
+        "Cannot produce: already producing or stream/transport not ready"
+      );
+      return;
+    }
 
     console.log("🎤 Starting to produce local media...");
 
-    const audioProducer = await sendTransportRef.current.produce({
-      track: localStream.getAudioTracks()[0],
-    });
-    const videoProducer = await sendTransportRef.current.produce({
-      track: localStream.getVideoTracks()[0],
-    });
+    const audioTrack = localStream.getAudioTracks()[0];
+    const videoTrack = localStream.getVideoTracks()[0];
 
-    producersRef.current.set("audio", audioProducer);
-    producersRef.current.set("video", videoProducer);
+    // Create audio producer
+    if (audioTrack) {
+      const audioProducer = await sendTransportRef.current.produce({
+        track: audioTrack,
+      });
+      producersRef.current.set("audio", audioProducer);
+    }
+
+    // Create video producer with specific encodings for compatibility
+    if (videoTrack) {
+      const videoProducer = await sendTransportRef.current.produce({
+        track: videoTrack,
+        encodings: [
+          // Simulcast for different quality layers
+          { maxBitrate: 100000, scaleResolutionDownBy: 4 },
+          { maxBitrate: 300000, scaleResolutionDownBy: 2 },
+          { maxBitrate: 900000, scaleResolutionDownBy: 1 },
+        ],
+        codecOptions: {
+          videoGoogleStartBitrate: 1000,
+        },
+      });
+      producersRef.current.set("video", videoProducer);
+    }
   };
 
   const toggleMute = () => {
@@ -278,5 +344,8 @@ export function useMediasoup(roomId: string, localStream: MediaStream | null) {
     isMuted,
     toggleCamera,
     isCameraOff,
+    startScreenShare,
+    stopScreenShare,
+    isScreenSharing,
   };
 }
