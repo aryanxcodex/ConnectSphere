@@ -13,12 +13,11 @@ import {
 } from "lucide-react";
 
 // Helper function for layout remains the same
-const getVideoSizeClasses = (count: number): string => {
-  if (count === 1) return "w-full max-w-4xl";
-  if (count === 2) return "w-[calc(50%-0.5rem)]";
-  if (count <= 4) return "w-[calc(50%-0.5rem)]";
-  if (count <= 9) return "w-[calc(33.33%-0.75rem)]";
-  return "w-[calc(25%-0.75rem)]";
+const getGridClasses = (count: number): string => {
+  if (count <= 2) return "grid-cols-1 sm:grid-cols-2";
+  if (count <= 4) return "grid-cols-2";
+  if (count <= 9) return "grid-cols-3";
+  return "grid-cols-4"; // Handles up to 16 participants
 };
 
 function Room() {
@@ -62,8 +61,8 @@ function Room() {
   }, [localStream, produce]);
 
   const participantCount = remoteStreams.length + 1;
-  const videoSize = useMemo(
-    () => getVideoSizeClasses(participantCount),
+  const gridLayout = useMemo(
+    () => getGridClasses(participantCount),
     [participantCount]
   );
 
@@ -88,49 +87,49 @@ function Room() {
       </header>
 
       {/* Main video grid remains the same */}
-      <main className="flex-1 flex flex-wrap items-center justify-center content-center gap-4 p-4 overflow-y-auto">
-        {/* Local video */}
-        <div
-          className={`relative rounded-lg overflow-hidden shadow-lg aspect-video ${videoSize}`}
-        >
-          <video
-            ref={localVideoRef}
-            autoPlay
-            muted
-            playsInline
-            className={`absolute top-0 left-0 w-full h-full object-cover ${
-              isCameraOff ? "hidden" : ""
-            }`}
-          />
-          {isCameraOff && (
-            <div className="w-full h-full bg-gray-800 flex items-center justify-center">
-              <p>Camera is off</p>
-            </div>
-          )}
-          <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded-md text-sm">
-            You {isMuted && "(Muted)"}
-          </div>
-        </div>
-
-        {/* Remote videos */}
-        {remoteStreams.map(({ id, stream }) => (
-          <div
-            key={id}
-            className={`relative rounded-lg overflow-hidden shadow-lg aspect-video ${videoSize}`}
-          >
+      <main className="flex-1 flex items-center justify-center p-4 min-h-0">
+        <div className={`grid gap-4 w-full h-full ${gridLayout}`}>
+          {/* Local video */}
+          <div className="relative bg-gray-800 rounded-lg overflow-hidden shadow-lg">
             <video
+              ref={localVideoRef}
               autoPlay
+              muted
               playsInline
-              className="absolute top-0 left-0 w-full h-full object-cover"
-              ref={(video) => {
-                if (video) video.srcObject = stream;
-              }}
+              className={`w-full h-full object-cover ${
+                isCameraOff ? "invisible" : ""
+              }`}
             />
+            {isCameraOff && (
+              <div className="absolute inset-0 w-full h-full bg-gray-800 flex items-center justify-center">
+                <p>Camera is off</p>
+              </div>
+            )}
             <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded-md text-sm">
-              Remote User
+              You {isMuted && "(Muted)"}
             </div>
           </div>
-        ))}
+
+          {/* Remote videos */}
+          {remoteStreams.map(({ id, stream }) => (
+            <div
+              key={id}
+              className="relative bg-gray-800 rounded-lg overflow-hidden shadow-lg"
+            >
+              <video
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover"
+                ref={(video) => {
+                  if (video) video.srcObject = stream;
+                }}
+              />
+              <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-2 py-1 rounded-md text-sm">
+                Remote User
+              </div>
+            </div>
+          ))}
+        </div>
       </main>
 
       {/* ✅ Footer updated to use lucide-react icons */}
